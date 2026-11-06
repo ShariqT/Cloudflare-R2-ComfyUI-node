@@ -61,7 +61,7 @@ class R2CloudUpload:
     #OUTPUT_NODE = False
     #OUTPUT_TOOLTIPS = ("",) # Tooltips for the output node
 
-    CATEGORY = "cloud"
+    CATEGORY = "image"
 
     def test(self, image):
         print(

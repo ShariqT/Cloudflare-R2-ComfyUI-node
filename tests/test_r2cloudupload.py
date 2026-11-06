@@ -18,4 +18,4 @@ def test_return_types():
     """Test the node's metadata."""
     assert R2CloudUpload.RETURN_TYPES == ("str",)
     assert R2CloudUpload.FUNCTION == "test"
-    assert R2CloudUpload.CATEGORY == "cloud"
+    assert R2CloudUpload.CATEGORY == "image"
