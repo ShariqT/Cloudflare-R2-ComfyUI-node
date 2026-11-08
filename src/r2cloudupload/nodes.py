@@ -1,96 +1,154 @@
 from inspect import cleandoc
+import boto3
+import io
+import uuid
+from datetime import datetime
+
+
 class R2CloudUpload:
     """
-    A example node
-
-    Class methods
-    -------------
-    INPUT_TYPES (dict):
-        Tell the main program input parameters of nodes.
-    IS_CHANGED:
-        optional method to control when the node is re executed.
-
-    Attributes
-    ----------
-    RETURN_TYPES (`tuple`):
-        The type of each element in the output tulple.
-    RETURN_NAMES (`tuple`):
-        Optional: The name of each output in the output tulple.
-    FUNCTION (`str`):
-        The name of the entry-point method. For example, if `FUNCTION = "execute"` then it will run Example().execute()
-    OUTPUT_NODE ([`bool`]):
-        If this node is an output node that outputs a result/image from the graph. The SaveImage node is an example.
-        The backend iterates on these output nodes and tries to execute all their parents if their parent graph is properly connected.
-        Assumed to be False if not present.
-    CATEGORY (`str`):
-        The category the node should appear in the UI.
-    execute(s) -> tuple || None:
-        The entry point method. The name of this method must be the same as the value of property `FUNCTION`.
-        For example, if `FUNCTION = "execute"` then this method's name must be `execute`, if `FUNCTION = "foo"` then it must be `foo`.
+    Uploads an image to Cloudflare R2 bucket and returns the public URL.
     """
+
     def __init__(self):
         pass
 
     @classmethod
     def INPUT_TYPES(s):
         """
-            Return a dictionary which contains config for all input fields.
-            Some types (string): "MODEL", "VAE", "CLIP", "CONDITIONING", "LATENT", "IMAGE", "INT", "STRING", "FLOAT".
-            Input types "INT", "STRING" or "FLOAT" are special values for fields on the node.
-            The type can be a list for selection.
-
-            Returns: `dict`:
-                - Key input_fields_group (`string`): Can be either required, hidden or optional. A node class must have property `required`
-                - Value input_fields (`dict`): Contains input fields config:
-                    * Key field_name (`string`): Name of a entry-point method's argument
-                    * Value field_config (`tuple`):
-                        + First value is a string indicate the type of field or a list for selection.
-                        + Secound value is a config for type "INT", "STRING" or "FLOAT".
+        Return a dictionary which contains config for all input fields.
         """
         return {
             "required": {
-                "image": ("Image", { "tooltip": "This is an image"}),
+                "image": ("IMAGE", {"tooltip": "The image to upload to R2"}),
+                "bucket_name": ("STRING", {
+                    "tooltip": "The name of the R2 bucket",
+                    "default": ""
+                }),
+                "account_id": ("STRING", {
+                    "tooltip": "Cloudflare account ID",
+                    "default": ""
+                }),
+                "access_key_id": ("STRING", {
+                    "tooltip": "R2 access key ID",
+                    "default": ""
+                }),
+                "secret_access_key": ("STRING", {
+                    "tooltip": "R2 secret access key",
+                    "default": ""
+                }),
+                "public_url_base": ("STRING", {
+                    "tooltip": "The public URL base for accessing the uploaded file (e.g., https://pub-xxx.r2.dev)",
+                    "default": ""
+                }),
+            },
+            "optional": {
+                "file_name": ("STRING", {
+                    "tooltip": "Custom filename (optional, will auto-generate if empty)",
+                    "default": ""
+                }),
             },
         }
 
-    RETURN_TYPES = ("str",)
-    #RETURN_NAMES = ("image_output_name",)
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("url",)
     DESCRIPTION = cleandoc(__doc__)
-    FUNCTION = "test"
+    FUNCTION = "upload"
 
-    #OUTPUT_NODE = False
-    #OUTPUT_TOOLTIPS = ("",) # Tooltips for the output node
+    OUTPUT_NODE = True
 
     CATEGORY = "image"
 
-    def test(self, image):
-        print(
-            f"""Your input contains:
-        """)
-        #do some processing on the image, in this example I just invert it
-        image = 1.0 - image
-        return ("hello",)
+    def upload(self, image, bucket_name, account_id, access_key_id, secret_access_key, public_url_base, file_name=""):
+        """
+        Upload an image to Cloudflare R2 bucket.
 
-    """
-        The node will always be re executed if any of the inputs change but
-        this method can be used to force the node to execute again even when the inputs don't change.
-        You can make this node return a number or a string. This value will be compared to the one returned the last time the node was
-        executed, if it is different the node will be executed again.
-        This method is used in the core repo for the LoadImage node where they return the image hash as a string, if the image hash
-        changes between executions the LoadImage node is executed again.
-    """
-    #@classmethod
-    #def IS_CHANGED(s, image, string_field, int_field, float_field, print_to_screen):
-    #    return ""
+        Args:
+            image: The image tensor from ComfyUI
+            bucket_name: The R2 bucket name
+            account_id: Cloudflare account ID
+            access_key_id: R2 access key ID
+            secret_access_key: R2 secret access key
+            public_url_base: The public URL base for accessing the file
+            file_name: Optional custom filename
+
+        Returns:
+            tuple: The public URL of the uploaded file
+        """
+        # Validate required parameters
+        if not all([bucket_name, account_id, access_key_id, secret_access_key]):
+            raise ValueError("All R2 credentials (bucket_name, account_id, access_key_id, secret_access_key) are required")
+
+        # Convert image tensor to PIL Image
+        import torch
+        from PIL import Image
+        import numpy as np
+
+        # ComfyUI images are torch tensors in the format (batch, height, width, channels)
+        # We take the first image from the batch
+        if isinstance(image, torch.Tensor):
+            image_np = image[0].cpu().numpy()
+        else:
+            image_np = image[0]
+
+        # Convert from float [0, 1] to uint8 [0, 255]
+        if image_np.dtype == np.float32 or image_np.dtype == np.float64:
+            image_np = (image_np * 255).astype(np.uint8)
+
+        # Create PIL Image
+        pil_image = Image.fromarray(image_np)
+
+        # Generate filename if not provided
+        if not file_name:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:8]
+            file_name = f"image_{timestamp}_{unique_id}.png"
+
+        # Ensure filename has extension
+        if not file_name.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            file_name += '.png'
+
+        # Save image to bytes buffer
+        buffer = io.BytesIO()
+        pil_image.save(buffer, format='PNG')
+        buffer.seek(0)
+
+        # Create S3 client for R2
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=f'https://{account_id}.r2.cloudflarestorage.com',
+            aws_access_key_id=access_key_id,
+            aws_secret_access_key=secret_access_key,
+            region_name='auto'
+        )
+
+        # Upload the file
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=file_name,
+            Body=buffer,
+            ContentType='image/png'
+        )
+
+        # Construct the public URL
+        if public_url_base:
+            # Remove trailing slash if present
+            public_url_base = public_url_base.rstrip('/')
+            url = f"{public_url_base}/{file_name}"
+        else:
+            # Fallback to R2.dev URL format
+            url = f"https://{bucket_name}.{account_id}.r2.dev/{file_name}"
+
+        return (url,)
 
 
 # A dictionary that contains all nodes you want to export with their names
 # NOTE: names should be globally unique
 NODE_CLASS_MAPPINGS = {
-    "R2 Cloud Upload": R2CloudUpload
+    "R2CloudUpload": R2CloudUpload
 }
 
 # A dictionary that contains the friendly/humanly readable titles for the nodes
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "R2CloudUpload": "R2CloudUpload"
+    "R2CloudUpload": "R2 Cloud Upload"
 }
