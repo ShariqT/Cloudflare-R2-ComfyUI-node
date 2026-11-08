@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "r2cloudupload"
-version = "0.0.1"
+version = "0.0.2"
 description = "Sends image files to a Cloudflare R2 bucket"
 authors = [
   {name = "Shariq Torres", email = "shariq.torres@gmail.com"}
